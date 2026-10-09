@@ -2,12 +2,14 @@
 
 A Claude Code skill that teaches Claude how to manage dotfiles with [chezmoi](https://www.chezmoi.io/), including machine-specific configuration.
 
+This is a fork of [cosgroveb/chezmoi-skill](https://github.com/cosgroveb/chezmoi-skill).
+
 ## Installation
 
 ### Manual
 
 ```bash
-git clone https://github.com/cosgroveb/chezmoi-skill.git ~/.claude/skills/chezmoi
+git clone https://github.com/madhukar-kc/chezmoi-skill.git ~/.claude/skills/chezmoi
 ```
 
 ### Via chezmoi
@@ -17,7 +19,7 @@ Add to your `.chezmoiexternal.toml`:
 ```toml
 [".claude/skills/chezmoi"]
     type = "git-repo"
-    url = "https://github.com/cosgroveb/chezmoi-skill.git"
+    url = "https://github.com/madhukar-kc/chezmoi-skill.git"
     refreshPeriod = "168h"
 ```
 

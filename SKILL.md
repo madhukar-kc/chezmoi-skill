@@ -3,11 +3,16 @@ name: chezmoi
 description: Manage dotfiles with chezmoi. Use when working with dotfiles, chezmoi templates, machine-specific configuration, syncing configs across machines, or when the user mentions chezmoi, dotfiles, or configuration management.
 allowed-tools:
   - Read
-  - Edit
-  - Write
   - Glob
   - Grep
-  - Bash(chezmoi *)
+  - Bash(chezmoi diff *)
+  - Bash(chezmoi cat *)
+  - Bash(chezmoi data *)
+  - Bash(chezmoi status *)
+  - Bash(chezmoi managed *)
+  - Bash(chezmoi unmanaged *)
+  - Bash(chezmoi source-path *)
+  - Bash(chezmoi execute-template *)
 ---
 
 # Chezmoi Dotfiles Management
@@ -16,13 +21,19 @@ allowed-tools:
 
 When the user asks about dotfiles or chezmoi operations, **implement the changes directly** using chezmoi commands rather than only suggesting them. If the user says "make this work on macOS only" or "add my bashrc to chezmoi", proceed with implementation.
 
-Always preview significant changes with `chezmoi diff` or `chezmoi cat <file>` before applying.
+Editing files in the source directory is fine: it is a git repo, so every edit can be reviewed and undone. Commands that change the home directory or publish anything need the user's approval first:
+
+- `chezmoi apply`: show `chezmoi diff` first, and apply only after the user approves that diff.
+- `chezmoi add`, `chezmoi re-add`, `chezmoi forget`, `chezmoi destroy`, `.chezmoiremove` entries, and git commit/push in the source directory: say what will change, then wait for approval.
+- Never pass `--force` unless the user has approved overwriting the specific files involved. `--force` overwrites files in the home directory that differ from the source state without asking.
+
+Before adding a file, check whether the repo is public (`chezmoi git -- remote -v`, then `gh repo view`) and search the file for secrets, tokens, employer names, internal hostnames and email addresses. Never add a whole directory such as `~/.claude` in one step; add the files you mean to share.
 
 ## Commands
 
 ```bash
 chezmoi add <file>           # Add file to chezmoi
-chezmoi apply --refresh-externals --force  # Apply changes (always use these flags)
+chezmoi apply                # Apply changes, only after the user approves the diff
 chezmoi diff                 # Preview what would change
 chezmoi cat <file>           # Preview rendered template output
 chezmoi data                 # Show available template variables
@@ -35,10 +46,23 @@ chezmoi edit ~/.local/share/chezmoi/.chezmoiremove  # Edit removal list
 | Prefix/Suffix | Effect |
 |---------------|--------|
 | `dot_` | Installed as `.` (`dot_gitconfig` → `~/.gitconfig`) |
-| `private_` | Restrictive permissions (600) |
+| `private_` | Removes group and world permissions. It does not hide the contents: the file is still plain text in the repo |
 | `executable_` | Executable permissions (755) |
 | `.tmpl` | Processed as Go template |
-| `symlink_` | Creates symlink |
+| `symlink_` | Creates a symlink; the file's content is the link target (one trailing newline is removed). An empty target removes the link. With `.tmpl`, the target is a template |
+| `exact_` | Directories only: removes everything in the target directory that chezmoi does not manage. Do not use it on directories that other tools also write to |
+| `create_` | Creates the file only if it does not exist yet; later edits in the home directory are kept |
+| `run_` | The file is a script that chezmoi runs |
+
+Script names combine attributes in this order: `run_`, then `once_` or `onchange_`, then `before_` or `after_`, then the name, then an optional `.tmpl` (for example `run_onchange_after_install-deps.sh.tmpl`). `run_onchange_` scripts run when their rendered content changes. To re-run one when another file changes, put that file's hash in a comment: `# hash: {{ include "dot_config/foo.json" | sha256sum }}`. Scripts must be safe to run more than once.
+
+## Ignoring Files (`.chezmoiignore`)
+
+- Patterns match target paths (as in the home directory, e.g. `.config/foo`), not source names (`dot_config/foo`).
+- The file is always processed as a template, so `{{ if }}` blocks can ignore files per machine.
+- `dir/` ignores the directory itself; `dir/**` ignores its contents.
+- A line starting with `!` excludes a pattern from ignoring, and these exclusions win over every ignore pattern. To share only some entries of a directory: `.claude/skills/*` followed by `!.claude/skills/aws-login`.
+- Remember the repo may be public: an ignore line itself names the file it ignores.
 
 ## Machine-Specific Templates
 
@@ -100,8 +124,8 @@ EOF
 # Preview what would be removed
 chezmoi diff
 
-# Apply to remove the files
-chezmoi apply --refresh-externals --force
+# Apply to remove the files, after the user approves the diff
+chezmoi apply
 ```
 
 ### Template-based removal (`.chezmoiremove.tmpl`)
@@ -122,7 +146,7 @@ The file is always processed as a template, even without the `.tmpl` extension.
 
 ## External Dependencies
 
-Manage external git repos in `.chezmoiexternal.toml`:
+Manage external git repos, archives or single files in `.chezmoiexternal.toml` (types `git-repo`, `archive`, `file`). A `git-repo` external hands the whole directory to git: chezmoi cannot manage other files in it.
 
 ```toml
 [".zsh/plugins/some-plugin"]
@@ -140,14 +164,15 @@ When converting a static config to machine-specific template:
 3. Run `chezmoi add --template <file>` to add as template
 4. Edit the template source to add conditionals (see "Machine-Specific Templates")
 5. Preview with `chezmoi cat <file>` to verify rendering on this machine
-6. Apply with `chezmoi apply --refresh-externals --force`
+6. Show the diff, and apply with `chezmoi apply` once the user approves
 
 ## Gotchas
 
 1. **Removing managed files**: Use `.chezmoiremove` to clean up files (see "Removing Files" section)
 2. **Always preview**: Run `chezmoi cat <file>` before applying templates
-3. **Always use `--refresh-externals --force` flags**: Critical because `--refresh-externals` ensures external git repos and archives update, and `--force` prevents interactive TTY prompts that would block execution (Claude cannot respond to interactive prompts)
-4. **Template errors**: Use `chezmoi execute-template '{{ .chezmoi.os }}'` to test template snippets
+3. **No `--force` without approval**: if `chezmoi apply` stops because a file in the home directory was changed outside chezmoi, show the user `chezmoi diff` for that file and ask whether to keep the local version (`chezmoi re-add <file>`) or overwrite it (`chezmoi apply --force <file>`). Claude cannot answer chezmoi's interactive prompts, so ask in the conversation instead.
+4. **`--refresh-externals` only when wanted**: externals re-download at most every `refreshPeriod`; pass `--refresh-externals` (`-R`) only when the user wants externals updated now. chezmoi checks externals on every `diff` and `apply`, so avoid large archives
+5. **Template errors**: Use `chezmoi execute-template '{{ .chezmoi.os }}'` to test template snippets
 
 ## Troubleshooting
 
